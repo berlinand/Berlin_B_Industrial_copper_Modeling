@@ -1,426 +1,384 @@
-
-from pymongo import MongoClient
 import streamlit as st
+import seaborn as sns
+import numpy as np
 import pandas as pd
-import plotly.express as px
-import folium
-from streamlit_folium import folium_static
+import math
+from scipy.stats import skew
+import matplotlib.pyplot as plt
+from sklearn.preprocessing import LabelEncoder
+from sklearn.linear_model import LogisticRegression
+from sklearn.linear_model import LinearRegression
+from sklearn.linear_model import Lasso
+from sklearn.linear_model import Ridge
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.tree import DecisionTreeRegressor
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.ensemble import GradientBoostingClassifier
+from sklearn.ensemble import GradientBoostingRegressor
+from sklearn.svm import SVC
+from sklearn.model_selection import train_test_split
+from sklearn.model_selection import GridSearchCV
+from sklearn.metrics import accuracy_score,precision_score,f1_score,recall_score,roc_auc_score
+from sklearn.metrics import mean_squared_error
+from sklearn.metrics import mean_absolute_error
 
-#mg_connection will connect monodb cluster to access databases and collections
-mg_connection=MongoClient("mongodb://localhost:27017")
+#This function is used to clean dataset by droping or filling null value and removing unwanted columns 
+def datacleaning(df):
 
-mgdb=mg_connection["sample_airbnb"]
-mgcol=mgdb["listingsAndReviews"]
+  df=df.dropna(subset=['status','selling_price','application','country','customer','id','item_date','thickness','delivery date'])
+  df = df.copy()
+  df['material_ref']=df['material_ref'].fillna(df['material_ref'].mode()[0]) 
+  df.loc[df['material_ref'].str.startswith('000'),'material_ref']=np.nan
+  df['material_ref']=df['material_ref'].fillna(df['material_ref'].mode()[0])
+  df=df[df['status']!='Draft']
+  df=df[df['status']!='To be approved']
+  df=df[df['status']!='Not lost for AM']
+  df=df[df['status']!='Revised']
+  df['status'] = df['status'].replace('Wonderful', 'Won')
+  df=df.drop(['id','item_date','delivery date'], axis=1)
+  df['quantity tons'] = df['quantity tons'].astype(np.float64)
+  return df
+# This function clean outliers and return the dataframe without outliners with conditions
+def clearoutliers(df,cns,cs2,ab):
+    for cn in cns:
+        q1=df[f'{cn}'].quantile(0.25)
+        q3=df[f'{cn}'].quantile(0.75)
 
-#This function convert mongodb datas into pandas dataframe
-def convert_mgcol_pd():
-    datas=[]
-    for x in mgcol.find():
-      datas.append(x)
-    df=pd.DataFrame(datas)
-    df['bathrooms']=df['bathrooms'].apply(str).astype(float)
-    df['price']=df['price'].apply(str).astype(float)
-    df['security_deposit']=df['security_deposit'].apply(str).astype(float)
-    df['cleaning_fee']=df['cleaning_fee'].apply(str).astype(float)
-    df['extra_people']=df['extra_people'].apply(str).astype(float)
-    df['guests_included']=df['guests_included'].apply(str).astype(int)
-    df['weekly_price']=df['weekly_price'].apply(str).astype(float)
-    df['monthly_price']=df['monthly_price'].apply(str).astype(float)
-    df['reviews']=df['reviews'].apply(tuple)
-    df['images']=df['images'].apply(tuple)
-    df['host']=df['host'].apply(tuple)
-    df['address']=df['address'].apply(tuple)
-    df['availability']=df['availability'].apply(tuple)
-    df['review_scores']=df['review_scores'].apply(tuple)
-    df['reviews']=df['reviews'].apply(lambda x:tuple(str(s) for s in x))
-    df['reviews']=df['reviews'].apply(lambda x:tuple(tuple(s) for s in x))
-    df['amenities']=df['amenities'].apply(tuple)
-    df['address']=df['address'].apply(str)
-    address=[]
-    for y in range(0,len(datas)):
-       row=datas[y]['address']
-       address.append(row)
-    df1=pd.DataFrame(address)
-    coordinates=[]
-    for z in range(0,len(datas)):
-       row=datas[z]['address']['location']['coordinates'] 
-       coordinates.append(row)
-    df2=pd.DataFrame(coordinates,columns=['longitude','latitude'])
-
-    reviews_score=[]
-    for a in range(0,len(datas)):
-       row=datas[a]["review_scores"]
-       reviews_score.append(row)
-    df3=pd.DataFrame(reviews_score,columns=['review_scores_accuracy',
-                                          'review_scores_cleanliness',
-                                          'review_scores_checkin',
-                                          'review_scores_communication',
-                                          'review_scores_location',
-                                          'review_scores_value',
-                                          'review_scores_rating'
-                                          ] )
-    avaliablity=[]
-    for b in range(0,len(datas)):
-       row=datas[b]['availability']
-       avaliablity.append(row)
-    df4=pd.DataFrame(avaliablity,columns=['availability_30',
-                                          'availability_60',
-                                          'availability_90',
-                                          'availability_365'
-                                          ] )
-
-    df=pd.concat([df,df1,df2,df3,df4],axis=1)
+        iqr=q3-q1
+        lb=q1-(1.5*iqr)
+        ub=q3+(1.5*iqr)
+        if cs2!=True:
+            if ab=='AFTER':
+              df=df[(df[f'{cn}']>=lb) & (df[f'{cn}']<=ub) ]
+            elif ab=='BEFORE':
+              df=df
+        elif cs2 ==True:
+           df=df.copy()
+           df.loc[(df[f'{cn}']<lb,f'{cn}')]=lb
+           df.loc[(df[f'{cn}']>ub,f'{cn}')]=ub
+     
 
     return df
-#This function analyse and drop unwanted columns in dataframe
-def droping(df):
-      df=df.drop('summary',axis=1)
-      df=df.drop('space',axis=1)
-      df=df.drop('neighborhood_overview',axis=1)
-      df=df.drop('notes',axis=1)
-      df=df.drop('transit',axis=1)
-      df=df.drop('first_review',axis=1)
-      df=df.drop('last_review',axis=1)
-      df=df.drop('reviews_per_month',axis=1)
-      df=df.drop('address',axis=1)
-      df=df.drop('location',axis=1)
-      df=df.dropna(subset=['availability_30','availability_60','availability_90','availability_365'])
 
-      return df
-
-#This function fill up the  nan values and delete small quantity of rows having nan value
-def del_add_values(df):
-    df=df[df['name']!='']
-    x=df['name'].duplicated()
-    df=df[x==False]
-    df['beds']=df['beds'].fillna(0.0)
-    df['bedrooms']=df['bedrooms'].fillna(0.0)
-    df['bathrooms']=df['bathrooms'].fillna(1.0)
-    df['weekly_price']=df['weekly_price'].fillna(7*df['price'])
-    df['monthly_price']=df['monthly_price'].fillna(30*df['price'])
-    df['cleaning_fee']=df['cleaning_fee'].fillna(df['cleaning_fee'].mean())
-    df['security_deposit']=df['security_deposit'].fillna(df['security_deposit'].mean())
-    df['name'] = df['name'].replace('{{ SAGRADA FAMILIA }} Center ROOM *****', 'SAGRADA FAMILIA- Center ROOM')
-    df=df.drop(["review_scores"],axis=1)
-    df['review_scores_accuracy']=df['review_scores_accuracy'].fillna(df['review_scores_accuracy'].mean())
-    df['review_scores_cleanliness']=df['review_scores_cleanliness'].fillna(df['review_scores_cleanliness'].mean())
-    df['review_scores_rating']=df['review_scores_rating'].fillna(df['review_scores_rating'].mean())
-    df['review_scores_value']=df['review_scores_value'].fillna(df['review_scores_value'].mean())
-
-    return df
-#This function  display a world map along with location of property in different country  and some details of property 
-def map(df,dp1,dp2a,dp2,dp3,op2):
-      try:
-
-          if 'select all country' in dp1:
-             df_li=list(df['country'].unique())
-
-             df1=df[df['country'].isin(df_li)].head(1000)
-
-          else:
-            df1=df[df['country'].isin(dp1)]
-          if dp2a=="less than":
-            if dp2!="select all":
-               df1=df1[df1['price']<dp2]
-            else:
-               df1=df1
-          else:
-            if dp2!="select all":
-              df1=df1[df1['price']>dp2]
-            else:
-               df1=df1
-            
-          if dp2a=="less than":
-            if dp2!="select all":
-               df1=df1[df1['weekly_price']<dp2]
-            else:
-               df1=df1
-          else:
-            if dp2!="select all":
-              df1=df1[df1['weekly_price']>dp2]
-            else:
-               df1=df1
-          if dp2a=="less than":
-            if dp2!="select all":
-               df1=df1[df1['monthly_price']<dp2]
-            else:
-               df1=df1
-          else:
-            if dp2!="select all":
-              df1=df1[df1['monthly_price']>dp2]
-            else:
-               df1=df1
-          if dp2a=="less than":
-            if dp3!="select all":
-              df1=df1[df1['bedrooms']<dp3]
-            else:
-               df1=df1
-          else:
-            if dp3!="select all":
-                df1=df1[df1['bedrooms']>dp3]
-            else:
-               df1=df1
-          if "select all" in op2:
-             df1=df1
-          else:
-             df1=df1[df1['property_type']].isin(op2)
-          loc_center = [df1['latitude'].mean(), df1['longitude'].mean()]
-          map1 = folium.Map(location = loc_center, zoom_start = 0, control_scale=True)
-          for index, loc in df1.iterrows():
-              Tooltip =f"""Name: {loc['name']}<br>property type: {loc['property_type']}<br>room type: {loc['room_type']}
-                                         <br>Bedroom: {loc['bedrooms']}<br>Street: {loc['street']}
-                       <br>Country: {loc['country']}<br>No of review: {loc['number_of_reviews']}<br>Rating: {loc['review_scores_rating']}
-                     <br>Daily price: {loc['price']}<br>weekly price: {loc['weekly_price']} <br>monthly price: {loc['monthly_price']} 
-                    <br>security deposit: {loc['security_deposit']}<br>cleaning fees: {loc['cleaning_fee']}
-                    <br>minimum_nights: {loc['minimum_nights']}<br>maximum_nights : {loc['maximum_nights']}
-                 """
-              folium.CircleMarker([loc['latitude'], loc['longitude']], tooltip=Tooltip, radius=2, weight=5, popup=loc['name']).add_to(map1)
-          folium.LayerControl().add_to(map1) 
-      except:
-          st.warning("In this country there are no more higher value ,please select lesser value")       
-          
-      return map1,df1  
-
-#This function display different types of chart for Visualization of price
-def price_charts(df1,chart_type,X):
+#This function adjust the dataset skewness to normal distribution  by log tranformation
+def skewnes(af,aa):
    
-    if chart_type=='scatter chart':
-        if X=="season":
-          a=[df1['availability_30'].sum(),df1['availability_60'].sum(),df1['availability_90'].sum(),df1['availability_365'].sum()]
-          Y=[a[0]*df1['price'].sum(),a[1]*df1['price'].sum(),a[2]*df1['price'].sum(),a[3]*df1['price'].sum()]
-          X=['30 days','60 days','90 days','365 days']
-        elif X=="Name":
-           X='name'
-           Y='price'
-        elif X=='property types':
-          X='property_type'
-          Y='price'
-        elif X=='country':
-          X='country'
-          Y='price'
-        fig1=px.scatter(
-          df1,
-          x=X,
-          y=Y,
-          title="Scatter plots chart"
-           )
-       
-        fig1.update_layout(hoverlabel_font_size=20,hoverlabel_font_family='Arial')
-        st.plotly_chart(fig1, theme="streamlit", use_container_width=True,height=1780) 
-    if chart_type=='pie chart':
-        if X=="season":
-          a=[df1['availability_30'].sum(),df1['availability_60'].sum(),df1['availability_90'].sum(),df1['availability_365'].sum()]
-          Y=[(a[3]-a[0])*df1['price'].sum(),(a[3]-a[1])*df1['price'].sum(),(a[3]-a[2])*df1['price'].sum(),(a[3]-a[3])*df1['price'].sum()]
-          X=['30 days','60 days','90 days','365 days']
-        elif X=="Name":
-           X='name'
-           Y='price'
-        elif X=='property types':
-          X='property_type'
-          Y='price'
-        elif X=='country':
-          X='country'
-          Y='price'
-        fig1=px.pie(
-          df1,
-          values=Y,
-          names=X,
-          title="pie chart"
-           )
-       
-        fig1.update_layout(hoverlabel_font_size=20,hoverlabel_font_family='Arial')
-        st.plotly_chart(fig1, theme="streamlit", use_container_width=True,height=1780) 
+  for col in aa:
+    print(col)
+    kw=skew(af[col])
+    if kw>-0.5 and kw<0.5:
+       print(skew(af[col]))
 
-    if chart_type=='bar chart':
-        if X=="seasons":
-          a=[df1['availability_30'].sum(),df1['availability_60'].sum(),df1['availability_90'].sum(),df1['availability_365'].sum()]
-          Y=[(a[3]-a[0])*df1['price'].sum(),(a[3]-a[1])*df1['price'].sum(),(a[3]-a[2])*df1['price'].sum(),(a[3]-a[3])*df1['price'].sum()]
-          X=['30 days','60 days','90 days','365 days']
-        elif X=="Name":
-           X='name'
-           Y='price'
-        elif X=='property types':
-          X='property_type'
-          Y='price'
-        elif X=='country':
-          X='country'
-          Y='price'
-        fig1=px.bar(
-          df1,
-          x=X,
-          y=Y,
-          title="Bar chart"
-           )
-       
-        fig1.update_layout(hoverlabel_font_size=20,hoverlabel_font_family='Arial')
-        st.plotly_chart(fig1, theme="streamlit", use_container_width=True,height=1780) 
-    if chart_type=='line chart':
-        if X=="season":
-          a=[df1['availability_30'].sum(),df1['availability_60'].sum(),df1['availability_90'].sum(),df1['availability_365'].sum()]
-          Y=[(a[3]-a[0])*df1['price'].sum(),(a[3]-a[1])*df1['price'].sum(),(a[3]-a[2])*df1['price'].sum(),(a[3]-a[3])*df1['price'].sum()]
-          X=['365 days','90 days','60 days','30 days']
-        elif X=="Name":
-           X='name'
-           Y='price'
-        elif X=='property types':
-          X='property_type'
-          Y='price'
-        elif X=='country':
-          X='country'
-          Y='price'
-        fig1=px.line(
-          df1,
-          x=X,
-          y=Y,
-          title="line chart"
-           )
-       
-        fig1.update_layout(hoverlabel_font_size=20,hoverlabel_font_family='Arial')
-        st.plotly_chart(fig1, theme="streamlit", use_container_width=True,height=1780) 
+    else:
+      print(np.log(skew(af[col])))
+      af[f'{col} log']=np.log(af[col])
+  return af
 
-#This function display different types of chart for Visualization of availability
-def avail_chart(df1,chart_type,X):
-    if chart_type=='scatter chart':
-        if X=="demand fluctuation in %":
-          a=[df1['availability_30'].sum(),df1['availability_60'].sum(),df1['availability_90'].sum(),df1['availability_365'].sum()]
-          Y=[(((a[1]-a[0])*100)/a[0]),(((a[2]-a[1])*100)/a[1]),(((a[3]-a[2])*100)/a[2])]
-          X=['30 days','60 days','90 days']
-        elif X=="occupancy rates in %":
-           X=['30 days','60 days','90 days']
-           a=[df1['availability_30'].sum(),df1['availability_60'].sum(),df1['availability_90'].sum(),df1['availability_365'].sum()]
-           Y=[(a[3]-a[0])/a[3],(a[3]-a[0])/a[3],(a[3]-a[0])/a[3]]
-        elif X=="avaliablity 30":
-           X='availability_30'
-           Y='price'
-        elif X=="avaliablity 60":
-           X='availability_60'
-           Y='price'
-        elif X=="avaliablity 90":
-           X='availability_90'
-           Y='price'
-        elif X=="avaliablity 365":
-           X='availability_365'
-           Y='price'
+# This function change the catogerical column to numerical value in binary 
+def lblencode(af):
+  model= LabelEncoder()
+  af['status']=model.fit_transform(af['status'])
+  return af
 
-        fig1=px.scatter(
-          df1,
-          x=X,
-          y=Y,
-          title="Scatter plots chart"
-           )  
-        fig1.update_layout(hoverlabel_font_size=20,hoverlabel_font_family='Arial')
-        st.plotly_chart(fig1, theme="streamlit", use_container_width=True,height=1780) 
+# This function change the catogerical column  to numerical value not in binary
+def onehotencode(af):
+   af=pd.get_dummies(af,columns=['item type','material_ref'],dtype=int)
+   return af
+#This function display befor and after chart by user selection
+def charts(df,aa,ab,chart,af):
+   if ab=="BEFORE":
+        if chart == 'BOXPLOT':
+         for col in aa:
+           st.write(f":red[column name]{'- '+col}")
+           
+           fig=plt.figure()
+           sns.boxplot(df[col])
+           st.pyplot(fig=fig)
+        if chart == 'DISTPLOT':
+         for col in aa:
+           st.write(f":red[column name]{'- '+col}")
+           st.write(f":red[skew]{skew(df[col])}")
+           fig=plt.figure()
+           sns.distplot(df[col])
+           st.pyplot(fig=fig)
+        if chart == 'HISTPLOT':
+         for col in aa:
+           st.write(f":red[column name]{'- '+col}")
+           st.write(f":red[skew]{skew(df[col])}")
+           fig=plt.figure()
+           sns.histplot(df[col])
+           st.pyplot(fig=fig)
+          
+        if chart == 'VIOLINPLOT':
+         for col in aa:
+           st.write(f":red[ncolumn name]{'- '+col}")
+           fig=plt.figure()
+           sns.violinplot(df[col])
+           st.pyplot(fig=fig)
+   if ab=="AFTER":
+        if chart == 'BOXPLOT':
+         for col in aa:
+           st.write(f":red[column name]{'- '+col}")
+           
+           fig=plt.figure()
+           sns.boxplot(af[col])
+           st.pyplot(fig=fig)
+        if chart == 'DISTPLOT':
+         for col in aa:
+           st.write(f":red[column name]{'- '+col}")
+           kw=skew(af[col])
+           if kw>-0.5 and kw<0.5:
+             st.write(f":red[skew]{skew(af[col])}")
+             fig=plt.figure()
+             sns.distplot(af[col])
+             st.pyplot(fig=fig)
+           else:
+             st.write(f":red[skew]{np.log(skew(af[col]))}")
+             fig=plt.figure()
+             sns.distplot(np.log(af[col]))
+             st.pyplot(fig=fig)
+        if chart == 'HISTPLOT':
+         for col in aa:
+           st.write(f":red[column name]{'- '+col}")
+           kw=skew(af[col])
+           if kw>-0.5 and kw<0.5:
+             st.write(f":red[skew]{skew(af[col])}")
+             fig=plt.figure()
+             sns.histplot(af[col])
+             st.pyplot(fig=fig)
+           else:
+             st.write(f":red[skew]{np.log(skew(af[col]))}")
+             fig=plt.figure()
+             sns.histplot(np.log(af[col]))
+             st.pyplot(fig=fig)
+          
+        if chart == 'VIOLINPLOT':
+         for col in aa:
+           st.write(f":red[ncolumn name]{'- '+col}")
+           fig=plt.figure()
+           sns.violinplot(af[col])
+           st.pyplot(fig=fig)
+#This function will display heatmap of correlation of the columns
+def heatmaps(af):
+  afsf=[ 'application',
+        'width', 'selling_price',
+       'country log', 'customer log', 'product_ref log',
+       'quantity tons log', 'thickness log']
+  kf=af[afsf]
+  co = kf.corr()
+  fig=plt.figure()
+  sns.heatmap(co, annot=True)
+  st.pyplot(fig=fig)
+ #This function display metrices value for the different classification models  in train and test data 
+def mlclas(models,af,cd,ch3,ch4,ch5):
+            if len(ch4)==0 or len(ch4)==1:
+              X = af.drop(['status'], axis=1)
+            else:
+              X=af[ch4]
+            y = af['status']
+            X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=ch5)
+            if models=='Logistic Regression':
+             if cd!=None:
+               model = LogisticRegression(**cd)
+             else:
+              model = LogisticRegression()
 
-    if chart_type=='line chart':
-        if X=="demand fluctuation in %":
-          a=[df1['availability_30'].sum(),df1['availability_60'].sum(),df1['availability_90'].sum(),df1['availability_365'].sum()]
-          Y=[(((a[1]-a[0])*100)/a[0]),(((a[2]-a[1])*100)/a[1]),(((a[3]-a[2])*100)/a[2])]
-          X=['30 days','60 days','90 days']
-        elif X=="occupancy rates in %":
-           X=['30 days','60 days','90 days']
-           a=[df1['availability_30'].sum(),df1['availability_60'].sum(),df1['availability_90'].sum(),df1['availability_365'].sum()]
-           Y=[(a[3]-a[0])/a[3],(a[3]-a[0])/a[3],(a[3]-a[0])/a[3]]
-        elif X=="avaliablity 30":
-           X='availability_30'
-           Y='price'
-        elif X=="avaliablity 60":
-           X='availability_60'
-           Y='price'
-        elif X=="avaliablity 90":
-           X='availability_90'
-           Y='price'
-        elif X=="avaliablity 365":
-           X='availability_365'
-           Y='price'
-        fig1=px.line(
-          df1,
-          x=X,
-          y=Y,
-          title="line chart"
-           )  
-        fig1.update_layout(hoverlabel_font_size=20,hoverlabel_font_family='Arial')
-        st.plotly_chart(fig1, theme="streamlit", use_container_width=True,height=1780) 
-    if chart_type=='bar chart':
-        if X=="demand fluctuation in %":
-          a=[df1['availability_30'].sum(),df1['availability_60'].sum(),df1['availability_90'].sum(),df1['availability_365'].sum()]
-          Y=[(((a[1]-a[0])*100)/a[0]),(((a[2]-a[1])*100)/a[1]),(((a[3]-a[2])*100)/a[2])]
-          X=['30 days','60 days','90 days']
-        elif X=="occupancy rates in %":
-           X=['30 days','60 days','90 days']
-           a=[df1['availability_30'].sum(),df1['availability_60'].sum(),df1['availability_90'].sum(),df1['availability_365'].sum()]
-           Y=[(a[3]-a[0])/a[3],(a[3]-a[0])/a[3],(a[3]-a[0])/a[3]]
-        elif X=="avaliablity 30":
-           X='availability_30'
-           Y='price'
-
-        elif X=="avaliablity 60":
-           X='availability_60'
-           Y='price'
-        elif X=="avaliablity 90":
-           X='availability_90'
-           Y='price'
-        elif X=="avaliablity 365":
-           X='availability_365'
-           Y='price'
-        fig1=px.bar(
-          df1,
-          x=X,
-          y=Y,
-          title="barchart"
-           )  
-        fig1.update_layout(hoverlabel_font_size=20,hoverlabel_font_family='Arial')
-        st.plotly_chart(fig1, theme="streamlit", use_container_width=True,height=1780) 
+            if models=='K-NN':
+             if cd!=None: 
+              model = KNeighborsClassifier(**cd)   
+             else:          
+              model = KNeighborsClassifier(n_neighbors=3)
+            if models=='svc':
+             if cd!=None:
+               model = SVC(**cd)
+             else:
+              model = SVC()
+            if models=='Decision Tree Classifier':
+             if cd!=None:
+               model = DecisionTreeClassifier(**cd)
+             else:
+              model = DecisionTreeClassifier()            
+            if models =='Random Forest Classifier':
+             if cd!=None:
+               model = RandomForestClassifier(**cd)
+             else:
+              model =RandomForestClassifier()                
 
 
-st.title(":orange[Airbnb Analysis]")        
-df=convert_mgcol_pd()
-df=droping(df)
-df=del_add_values(df)
-option_dp1=list(df['country'].unique())
-option_dp1.insert(0,'select all country')
-co1, co2=st.columns(2)
-ch1=co1.checkbox(label="map1")
+            if models =='Gradient Boosting Classifier':
+             if cd!=None:
+               model = GradientBoostingClassifier(**cd)
+             else:
+              model =GradientBoostingClassifier()  
+            model.fit(X_train, y_train)           
+            train_predict = model.predict(X_train)
+            test_predict = model.predict(X_test)
+            st.write(f":violet[Train Accuracy]-{accuracy_score(y_train,train_predict)}")
+            st.write(f":violet[Train Precision]-{precision_score(y_train,train_predict)}")
+            st.write(f":violet[Train F1] -{f1_score(y_train,train_predict)}")
+            st.write(f":violet[Train Recall] -{recall_score(y_train,train_predict)}")
+            st.write(f":violet[Train Auc] -{roc_auc_score(y_train,train_predict)}")
+            st.write(f":violet[Test Accuracy] -{accuracy_score(y_test,test_predict)}")
+            st.write(f":violet[Test Precision]-{precision_score(y_test,test_predict)}")
+            st.write(f":violet[Test F1 ]-{f1_score(y_test,test_predict)}")
+            st.write(f":violet[Test Recall] -{recall_score(y_test,test_predict)}")
+            st.write(f":violet[Test Auc] -{roc_auc_score(y_test,test_predict)}")
 
-dp1=co2.multiselect(label="select country",options=option_dp1)
-co1a, co2a=st.columns(2)
-dp2a=co1a.radio(label="select",options=["less than","more than"],horizontal=True)
-dp2b=co2a.radio(label="select",options=["Daily rent","weekly rent","monthly rent"],horizontal=True)
+ #This function give good parameter value for the different classification models  in train and test data 
+def cvse(models,af):
+            if len(ch4)==0 or len(ch4)==1:
+              X = af.drop(['status'], axis=1)
+            else:
+              X=af[ch4]
+            y = af['status']
+            X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2)
+            if models=='Logistic Regression':
+              model = LogisticRegression()
+              params={
+               'penalty':['l1', 'l2', 'elasticnet', None],
+               'tol':[0.0001,0.0002,0.0003,0.0004,0.0003,0.0002]
+               #'max_iter':[100,200,300,400]
+               
+            } 
+            if models=='K-NN':
+              model = KNeighborsClassifier()
+              params={
+              'n_neighbors':[3,4,5,6,7]
+            }
+            if models=='svc':
+              model = SVC()
+              params={
+                 #'kernel':['linear', 'poly', 'rbf', 'sigmoid', 'precomputed'],
+                 'gamma':['scale', 'auto'],
+                 'tol':[0.0001,0.0002,0.0003,0.0004,0.0003,0.0002]
+              }
+            if models=='Decision Tree Classifier':
+              model = DecisionTreeClassifier()   
+              params={
+                  'criterion':['gini', 'entropy', 'log_loss'],
+                  'max_depth':[2,3,4,5,6,7],
+                  'min_samples_split':[2,3,4,5,6,7,8,9]
+              }
+            if models =='Random Forest Classifier':
+              model=RandomForestClassifier()
+              params={
+                  'criterion':['gini', 'entropy', 'log_loss'],
+                  'max_depth':[2,3,4,5,6,7],
+                  'min_samples_split':[2,3,4,5,6,7,8,9]
+              }                
+            if models =='Gradient Boosting Classifier':
+              model =GradientBoostingClassifier()    
+              params={
+                
+                 'loss':['log_loss', 'exponential'],
+                  'learning_rate':[1.0,1.1,1.2,1.5,2.0,2.3,3.0],
+                  'n_estimators':[25,50,100,150,200,250]
 
-co3, co4,co10=st.columns(3)
-op2=list(df['property_type'].unique())
-op2.insert(0,'select all')
-if dp2b=="Daily rent":
-  dp2=co3.selectbox(label="select Daily rent ",options=["select all",500,1000,1500,2000,2500,3000,3500,4000,4500,5000])
-elif dp2b=="weekly rent":
-    dp2=co3.selectbox(label="select weekly rent ",options=["select all",5000,10000,15000,20000,25000,30000,35000])
-else:
-  dp2=co3.selectbox(label="select monthly rent ",options=["select all",5000,10000,15000,20000,25000,30000,35000,
-                                                    40000,50000,60000,70000,80000,90000,100000,20000,30000,35000       ])
-dp3=co4.selectbox(label="select bedrooms",options=["select all",0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20])
-dp4=co10.selectbox(label="property type",options=op2)
+              }          
+            
+            cv=GridSearchCV(model,params)
+            cv.fit(X_train, y_train)
+            cds=cv.best_params_
+            st.write(f":red[Best cv]-{cds}")
+      
+            return cds
+ #This function display metrices value for the different regression models  in train and test data 
+def mlreg(af,models,ch4,ch5):
+            if len(ch4)==0 or len(ch4)==1:         
+               X = af.drop(['selling_price'], axis=1)
+            else:
+              X=af[ch4]
+            y = af['selling_price']
+            X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=ch5)
+            if models=='Linear Regression':
+               model=LinearRegression()
+            if models=='Lasso':
+               model=Lasso()
+            if models=='Ridge':
+               model=Ridge()        
+            if models=='Decision Tree Regression':
+               model=DecisionTreeRegressor()
+                  
+            if models=='Random Forest Regression':
+               model=RandomForestRegressor() 
+            if models=='Gradient Boosting Regression':
+               model=GradientBoostingRegressor()                    
+            model.fit(X_train,y_train)
+            train_pred=model.predict(X_train)
+            test_pred=model.predict(X_test)
+            st.write(F":violet[Train MSE]-{mean_squared_error(y_train,train_pred)} ")
+            st.write(F":violet[Test MSE]-{mean_squared_error(y_test,test_pred)} ")
+            st.write(F":violet[Train RMSE]-{math.sqrt(mean_squared_error(y_train,train_pred))} ")
+            st.write(F":violet[Test RMSE]-{math.sqrt(mean_squared_error(y_test,test_pred))} ")
+            st.write(F":violet[Train MAE]-{mean_absolute_error(y_train,train_pred)} ")
+            st.write(F":violet[Test MAE]-{mean_absolute_error(y_test,test_pred)} ")
 
-try:
-   map1,df1=map(df,dp1,dp2a,dp2,dp3,op2)
-except :
-   st.write("") 
+
+#This function to read the data file from local system and convert into dataframe
+@st.cache_data          
+def readdata():
+ df=pd.read_excel(r"C:\Users\berli\Downloads\Copper_Set.xlsx",nrows=2000)
+ return df
+#This function will return random sample data from dataframe 
+def sa_random(df):
+  df=df.sample(n=rsa, random_state=1)
+  return df
 
 
-if ch1==True and len(dp1)>0:
-  try:
-   st_data =folium_static(map1)
-  except :
-    st.write("") 
-st.subheader(":violet[Price Visualization]")
-co5,co6=st.columns(2)
-chart_type=co5.selectbox(label="select a chart type",options=["select a chart","pie chart","line chart",'scatter chart','bar chart'])
-X=co6.selectbox(label="select a value" ,options=['Name','property types',"country","season"])
-st.subheader(":blue[avaliablity Visualization]")
-co7,co8=st.columns(2)
-chart_type1=co7.selectbox(label="select a charttype",options=["select a chart",'scatter chart','bar chart',"line chart"])
-X1=co8.selectbox(label="select a value" ,options=['demand fluctuation in %','occupancy rates in %',"avaliablity 30",
-                                                  "avaliablity 60","avaliablity 90","avaliablity 365"]) 
-try:
-  price_charts(df1,chart_type,X)
-  avail_chart(df1,chart_type1,X1)
-except:
-  st.write("")   
+
+
+df=readdata()
+st.title(":blue[Industrial] :orange[Copper] :blue[Modeling]")
+ct1=st.checkbox(label='random sampling')
+cs2=False
+if ct1 ==True:
+  c10,c11=st.columns(2)
+  rsa=c10.number_input(label='No of random dataset',min_value=200)
+  cs2=c11.checkbox(label='capping')
+  df=sa_random(df)
+
+df=datacleaning(df)
+aa=list(df.columns)
+aa.remove('material_ref')
+aa.remove('status')
+aa.remove('item type')
+aa.sort()
+
+
+  
+co1,co2,co3=st.columns(3) 
+ab=co1.selectbox(label="Before or After", options=["BEFORE","AFTER"])
+ch1=co3.checkbox(label="HEATMAP")
+af=clearoutliers(df,aa,cs2,ab)
+af=skewnes(af,aa)
+af=lblencode(af)
+af=onehotencode(af)
+chart=co2.selectbox(label="Select a Chart",options=["BOXPLOT" ,"VIOLINPLOT","DISTPLOT","HISTPLOT"])
+charts(df,aa,ab,chart,af)
+if ch1==True:
+  heatmaps(af)
+co4,co5,co6,co7,co8=st.columns(5)
+recl=co4.selectbox(label="select a value",options=['Classification','Regression'])
+if recl == 'Classification':
+  models=co5.selectbox(label='select a model',options=['Logistic Regression','K-NN','svc','Decision Tree Classifier',
+                                                       'Random Forest Classifier', 'Gradient Boosting Classifier'])
+  ch3=co6.checkbox(label="Best CV")
+  ch4=co7.multiselect(label="select columns",options=list(af.columns.values))
+  ch5=co8.selectbox(label="test data ",options=[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9])
+cds=None
+if recl == 'Classification':
+  mlclas(models,af,cds,ch3,ch4,ch5)
+  if ch3==True:
+    cds1=cvse(models,af,ch4)
+    
+    mlclas(models,af,cds1,ch3,ch4,ch5)
+if recl =='Regression':
+    models=co5.selectbox(label='select a model',options=['Linear Regression','Lasso','Ridge','Decision Tree Regression',
+                                                          'Random Forest Regression', 'Gradient Boosting Regression'])
+    
+    ch4=co6.multiselect(label="select columns",options=list(af.columns.values))
+    ch5=co7.selectbox(label="test data ",options=[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9])
+    mlreg(af,models,ch4,ch5)
+
