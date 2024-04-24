@@ -23,4 +23,7 @@ Regrassion models
  ![image](https://github.com/berlinand/Berlin_B_Industrial_copper_Modeling/assets/154864172/d0af6aa7-15df-41b9-901e-bd508d5ce403)
 classification models
 ![image](https://github.com/berlinand/Berlin_B_Industrial_copper_Modeling/assets/154864172/acea0262-40ac-4a52-b84e-67f9dca253e3)
+## predicted result
+![image](https://github.com/berlinand/Berlin_B_Industrial_copper_Modeling/assets/154864172/e58758a1-e620-4078-9711-10a3ac17174f)
+![image](https://github.com/berlinand/Berlin_B_Industrial_copper_Modeling/assets/154864172/46960758-8499-41ff-a3b8-9fb9c5cf50cf)
 
